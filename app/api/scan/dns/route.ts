@@ -1,61 +1,47 @@
-import { NextRequest, NextResponse } from "next/server";
-import axios from "axios";
+import { NextRequest, NextResponse } from 'next/server';
+import * as dns from 'dns/promises';
 
-const DNS_TYPES = ["A", "AAAA", "MX", "TXT", "CNAME", "NS", "SOA", "CAA"];
-
-export async function GET(request: NextRequest) {
-  const domain = request.nextUrl.searchParams.get("domain");
-  if (!domain) return NextResponse.json({ error: "Domain required" }, { status: 400 });
+export async function POST(req: NextRequest) {
+  const { domain } = await req.json();
+  const results: any = { domain, records: {}, issues: [] };
 
   try {
-    const results: any = {};
+    const a = await dns.resolve4(domain);
+    results.records.A = a;
+  } catch { results.records.A = []; }
 
-    await Promise.all(DNS_TYPES.map(async (type) => {
-      try {
-        const response = await axios.get(`https://cloudflare-dns.com/dns-query`, {
-          params: {
-            name: domain,
-            type: type
-          },
-          headers: {
-            "Accept": "application/dns-json"
-          }
-        });
+  try {
+    const mx = await dns.resolveMx(domain);
+    results.records.MX = mx;
+  } catch { results.records.MX = []; }
 
-        if (response.data.Answer) {
-          results[type.toLowerCase()] = response.data.Answer.map((ans: any) => ({
-            type: type,
-            name: ans.name,
-            content: ans.data,
-            ttl: ans.TTL,
-            priority: ans.data.split(" ")[0] && type === "MX" ? parseInt(ans.data.split(" ")[0]) : undefined
-          }));
-        } else {
-          results[type.toLowerCase()] = [];
-        }
-      } catch (err) {
-        console.error(`DNS Error for ${type}:`, err);
-        results[type.toLowerCase()] = [];
-      }
-    }));
+  try {
+    const txt = await dns.resolveTxt(domain);
+    const flatTxt = txt.map(t => t.join(' '));
+    results.records.TXT = flatTxt;
+    const spf = flatTxt.filter(t => t.startsWith('v=spf1'));
+    if (spf.length === 0) results.issues.push('No SPF record found - email spoofing possible');
+    const dmarc = flatTxt.filter(t => t.startsWith('v=DMARC1'));
+    if (dmarc.length === 0) results.issues.push('No DMARC record found');
+  } catch { results.records.TXT = []; results.issues.push('No TXT records'); }
 
-    // Clean up MX content if it includes priority
-    if (results.mx) {
-      results.mx = results.mx.map((record: any) => {
-        const parts = record.content.split(" ");
-        if (parts.length > 1) {
-          return {
-            ...record,
-            priority: parseInt(parts[0]),
-            content: parts.slice(1).join(" ")
-          };
-        }
-        return record;
-      }).sort((a: any, b: any) => (a.priority || 0) - (b.priority || 0));
-    }
+  try {
+    const cname = await dns.resolveCname(domain);
+    results.records.CNAME = cname;
+  } catch { results.records.CNAME = []; }
 
-    return NextResponse.json(results);
-  } catch (error: any) {
-    return NextResponse.json({ error: "Failed to fetch DNS records", details: error.message }, { status: 500 });
-  }
+  try {
+    const ns = await dns.resolveNs(domain);
+    results.records.NS = ns;
+    if (ns.some(n => n.includes('dnssec'))) results.records.DNSSEC = true;
+    if (ns.length < 2) results.issues.push('Only one nameserver - no redundancy');
+  } catch { results.records.NS = []; }
+
+  try {
+    const caa = await dns.resolveCaa(domain);
+    results.records.CAA = caa;
+    if (caa.length === 0) results.issues.push('No CAA record - any CA can issue certificates');
+  } catch { results.records.CAA = []; }
+
+  return NextResponse.json(results);
 }
