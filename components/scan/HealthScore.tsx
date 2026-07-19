@@ -3,7 +3,7 @@
 import { HealthScoreData } from "@/lib/types";
 import { PieChart, Pie, Cell, ResponsiveContainer } from "recharts";
 import { cn } from "@/lib/utils";
-import { Shield, AlertTriangle, CheckCircle, Info } from "lucide-react";
+import { Shield, AlertTriangle, CheckCircle, Info, Globe } from "lucide-react";
 
 interface HealthScoreProps {
   data?: HealthScoreData | null;
